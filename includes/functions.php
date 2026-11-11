@@ -32,7 +32,7 @@ function eps_get_token( $order_id ) {
 
     global $wpdb;
 
-    return $wpdb->get_row(  $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}eps_token WHERE order_id = $order_id order by id DESC")  );
+    return $wpdb->get_row(  $wpdb->prepare( "SELECT * FROM {$wpdb->prefix}eps_token WHERE order_id = %d order by id DESC", $order_id )  );
 }
 
 /**
@@ -67,7 +67,7 @@ function insertTransectionInfo( $args = [] ) {
       $table_name = $wpdb->prefix . 'eps_transections';  
     }
    // $status =  $args['response_description'];
-    $query = sprintf("select * from $table_name where customer_account = $customer_account order by id desc limit 1");
+    $query = $wpdb->prepare("select * from $table_name where customer_account = %s order by id desc limit 1", $customer_account);
     $data = $wpdb->get_results( $query );
     if (count($data)> 0){
 
@@ -104,9 +104,12 @@ function my_custom_enqueue_scripts() {
 
 
 add_action('wp_ajax_eps_transection_endpoint', 'my_custom_ajax_endpoint'); //logged in
-add_action('wp_ajax_no_priv_eps_transection_endpoint', 'my_custom_ajax_endpoint'); //not logged in
 
 function my_custom_ajax_endpoint(){
+
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( [ 'message' => 'Forbidden' ], 403 );
+    }
 
     $response = []; 
     
@@ -153,6 +156,10 @@ function eps_update_product_status() {
         wp_send_json_error(['message' => 'Invalid nonce'], 400);
     }
 
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( [ 'message' => 'Forbidden' ], 403 );
+    }
+
     // Validate POST
     $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
     $status = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';
@@ -191,7 +198,10 @@ function eps_sync_gateway() {
     if (!isset($_POST['_ajax_nonce']) || !wp_verify_nonce($_POST['_ajax_nonce'], 'eps_update_product_status_nonce')) {
         wp_send_json_error(['message' => 'Invalid nonce'], 400);
     }
-    
+
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( [ 'message' => 'Forbidden' ], 403 );
+    }
     
        // Current UTC time = end date
     $range = sanitize_text_field($_POST['range'] ?? '12_months');
@@ -364,6 +374,12 @@ function myplugin_handle_cancel_payment() {
     if ( $order->get_payment_method() !== 'eps' ) {
         return;
     }
+
+    // Only the customer (who holds the order key) may cancel, and only unpaid orders.
+    $order_key = sanitize_text_field( wp_unslash( $_GET['order'] ?? '' ) );
+    if ( ! $order_key || ! hash_equals( $order->get_order_key(), $order_key ) || ! $order->has_status( array( 'pending', 'failed' ) ) ) {
+        return;
+    }
     
     // Read gateway response
     $status  = sanitize_text_field( $_GET['Status'] ?? '' );
@@ -389,37 +405,6 @@ function myplugin_handle_cancel_payment() {
         );
     }*/
 }
-/**
- * Handle WooCommerce payment cancel via custom cancel_order query
- */
-function custom_wc_handle_payment_cancel() {
-    if ( ! is_admin() && isset($_GET['cancel_order']) && 'true' === $_GET['cancel_order'] ) {
-
-        // sanitize
-        $order_id = isset($_GET['order_id']) ? intval($_GET['order_id']) : 0;
-
-        // Cancel order if exists
-        if ( $order_id ) {
-            $order = wc_get_order( $order_id );
-            if ( $order && ! $order->has_status('cancelled') ) {
-                $order->update_status( 'cancelled', 'Payment was cancelled by gateway/redirect.' );
-            }
-        }
-
-        // Clear customer cart
-        if ( WC()->cart ) {
-            WC()->cart->empty_cart();
-        }
-
-        // Optional: remove query args and redirect (better UX to avoid re-trigger)
-        $redirect = wc_get_page_permalink('/'); // homepage/shop page
-
-        wp_safe_redirect( $redirect );
-        exit;
-    }
-}
-add_action( 'template_redirect', 'custom_wc_handle_payment_cancel', 20 );
-
 add_action( 'woocommerce_order_status_cancelled', 'eps_order_cancelled', 10, 1 );
 
 function eps_order_cancelled( $order_id ) {
@@ -456,5 +441,4 @@ function auto_complete_paid_order($order_id) {
 
 function warning_handler($errno, $errstr, $errfile, $errline, array $errcontext = []) { }
 
-  set_error_handler('warning_handler', E_WARNING);
 

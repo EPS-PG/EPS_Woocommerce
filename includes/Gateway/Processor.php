@@ -77,8 +77,8 @@ class Processor {
 	}
 
 	public function GenerateHash($payload,$hashkey){
-		$utf8_key = utf8_encode($hashkey);
-		$utf8_payload = utf8_encode($payload);
+		$utf8_key = (string) $hashkey;
+		$utf8_payload = (string) $payload;
 		$data = hash_hmac('sha512', $utf8_payload, $utf8_key,true);
 		$hmac = base64_encode($data);
 		return $hmac;
@@ -266,7 +266,7 @@ class Processor {
 	}
 	public function GenerateHashForSync($storeId, $hashKey)
     {
-        $utf8_payload = utf8_encode($storeId);
+        $utf8_payload = (string) $storeId;
         $data = hash_hmac('sha512', $utf8_payload, $hashKey, true);
         return base64_encode($data);
     }
@@ -279,7 +279,6 @@ class Processor {
             'timeout'     => 30,
             'redirection' => 30,
             'blocking'    => true,
-            'sslverify'   => false,
         ];
     
         $response = wp_remote_post(esc_url_raw($url), $request);
@@ -433,7 +432,6 @@ class Processor {
 			'blocking'    => true,
 			'headers'     => $headers,
 			'cookies'     => [],
-			'sslverify' => false
 		];
 
 		$response = wp_remote_post( esc_url_raw( $url ), $args );
@@ -460,7 +458,6 @@ class Processor {
 			'blocking'    => true,
 			'headers'     => $headers,
 			'cookies'     => [],
-			'sslverify' => false
 		];
 
 		$response = wp_remote_get( esc_url_raw( $url ), $args );
