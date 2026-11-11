@@ -86,7 +86,9 @@ class EPS extends \WC_Payment_Gateway {
         $url = $this->get_return_url($order);
         $split_info = explode("order-received", $url);
         $r_url = count($split_info) ? $split_info[0] : $order->get_cancel_endpoint();
-        $invoice_id = time();
+        $invoice_id = time() . wp_rand(100000, 999999);
+        $order->update_meta_data('_eps_merchant_transaction_id', $invoice_id);
+        $order->save();
 
         $create_payment_data = $processor->create_payment(
             (float) $order->get_total(),
@@ -123,15 +125,19 @@ class EPS extends \WC_Payment_Gateway {
     public function thank_you_page($order_id) {
         $order = wc_get_order($order_id);
 
-        if (!$order || 'eps' !== $order->get_payment_method()) {
+        if (!$order || 'eps' !== $order->get_payment_method() || $order->is_paid()) {
+            return;
+        }
+
+        $expected_txn_id = (string) $order->get_meta('_eps_merchant_transaction_id');
+        if ($expected_txn_id === '' || (isset($_GET['MerchantTransactionId']) && $_GET['MerchantTransactionId'] !== $expected_txn_id)) {
+            $order->add_order_note('EPS: transaction ID does not belong to this order. Payment not accepted.');
             return;
         }
 
         $processor = dc_eps()->gateway->processor();
         global $wp;
-        $current_url = add_query_arg($_SERVER['QUERY_STRING'], '', home_url($wp->request));
-        $url_components = parse_url($current_url);
-        parse_str($url_components['query'] ?? '', $params);
+        $params = ['MerchantTransactionId' => $expected_txn_id, 'EPSTransactionId' => $_GET['EPSTransactionId'] ?? null];
 
         $check_payment_data = $processor->check_payment($params['MerchantTransactionId'] ?? '');
         $status = 'Fail';
@@ -154,6 +160,25 @@ class EPS extends \WC_Payment_Gateway {
 
         insertTransectionInfo($args);
 
-        $order->payment_complete();
+        $is_success = is_array($check_payment_data)
+            && strcasecmp(trim((string) ($check_payment_data['Status'] ?? '')), 'Success') === 0;
+        $txn_matches = !isset($check_payment_data['MerchantTransactionId'])
+            || (string) $check_payment_data['MerchantTransactionId'] === $expected_txn_id;
+        $amount_matches = isset($check_payment_data['TotalAmount'])
+            && abs((float) $check_payment_data['TotalAmount'] - (float) $order->get_total()) < 0.01;
+
+        if (!$is_success || !$txn_matches) {
+            $order->add_order_note('EPS: payment not confirmed by gateway (status: ' . sanitize_text_field((string) $status) . ').');
+            return;
+        }
+
+        if (!$amount_matches) {
+            $order->update_status('on-hold', 'EPS: paid amount does not match order total. Please review.');
+            return;
+        }
+
+        // The plugin's other EPS calls and the return URL use "EPSTransactionId".
+        $eps_txn_id = $check_payment_data['EPSTransactionId'] ?? $check_payment_data['EpsTransactionId'] ?? $params['EPSTransactionId'] ?? '';
+        $order->payment_complete(sanitize_text_field((string) $eps_txn_id));
     }
 }
